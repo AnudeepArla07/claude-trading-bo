@@ -1,0 +1,5 @@
+anthropic>=0.25.0
+alpaca-trade-api>=3.0.0
+schedule>=1.2.0
+requests>=2.31.0
+pytz>=2023.3

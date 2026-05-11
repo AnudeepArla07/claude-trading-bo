@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.pyc
+.env
+trades.db
+trading_bot.log
+*.zip
