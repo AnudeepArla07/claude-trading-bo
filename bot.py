@@ -4,29 +4,22 @@ bot.py
 Claude Trading Bot — Stocks + Options dual-layer system.
 
 Fixes in this version:
+  - Watchlist refresh ALWAYS runs on startup (not just when market is open)
+  - Core + dynamic watchlist logging
   - Position check: never buys the same stock twice
   - Options check: never opens a second options position on same ticker
-  - Clean cycle logging
-
-Flow each cycle:
-  1. Dynamic watchlist scan (daily at 9:31 AM)
-  2. Fetch quotes + compute 15 technical indicators per ticker
-  3. Stock brain (Claude) → best stock trade
-  4. Options brain (Claude) → best options trade on same signals
-  5. Risk checks on both decisions
-  6. Execute via Alpaca (paper or live)
-  7. Auto-exit options hitting stop/target
-  8. Trailing stops on stock positions
-  9. Log everything to SQLite
+  - Weekend check using ET timezone
+  - Auto-restart on crash
 
 Run: python bot.py
+Run dry mode: python bot.py --dry-run
 """
 
 import argparse
-import sys
 import time
 import logging
 import schedule
+import pytz
 from datetime import datetime
 from typing import Optional
 
@@ -52,6 +45,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+ET = pytz.timezone("America/New_York")
+
 
 class TradingBot:
     def __init__(self, dry_run: bool = False):
@@ -60,9 +55,11 @@ class TradingBot:
         log.info("=" * 65)
 
         self.config = Config()
+        self.dry_run = dry_run
+
         if dry_run:
-            self.config.DRY_RUN = True
-            log.info("⚠️  DRY RUN enabled — no live orders will be submitted.")
+            log.info("⚠️  DRY RUN — no live orders will be submitted.")
+
         self.data = MarketDataFeed(self.config)
         self.stock_brain = ClaudeBrain(self.config)
         self.options_brain = OptionsBrain(self.config)
@@ -77,18 +74,19 @@ class TradingBot:
         self.cycle_count = 0
 
         log.info("✅ All systems ready.")
-        log.info("📋 Watchlist: %s", self.watchlist)
+        log.info("📋 Starting watchlist: %s", self.watchlist)
         log.info("🔁 Cycle every %d min", self.config.CYCLE_MINUTES)
 
     # ─────────────────────────────────────────────────────────────
-    # WATCHLIST
+    # WATCHLIST — always runs on startup regardless of market hours
     # ─────────────────────────────────────────────────────────────
 
     def refresh_watchlist(self):
+        log.info("─" * 65)
         log.info("🔍 Refreshing watchlist...")
 
         try:
-            # Always keep these core tickers regardless of scanner
+            # Core tickers — always included no matter what scanner returns
             core = [
                 "NVDA",
                 "AMD",
@@ -107,45 +105,49 @@ class TradingBot:
                 "UBER",
             ]
 
-            # Scanner finds today's best movers
+            # Scanner finds today's best movers on top of core
+            log.info("   Running market scanner...")
             dynamic = self.scanner.get_dynamic_watchlist()
 
-            # Combine — core always included, dynamic adds top movers
+            # Combine — deduplicate, keep order, max 15 tickers
             combined = list(dict.fromkeys(core + (dynamic or [])))[:15]
             self.watchlist = combined
 
-            log.info("✅ Watchlist: %d tickers", len(self.watchlist))
-            log.info("   Core    : %s", core)
-            log.info("   Dynamic : %s", [t for t in self.watchlist if t not in core])
+            # Extra tickers the scanner added beyond core
+            added = [t for t in self.watchlist if t not in core]
+
+            log.info("✅ Watchlist refreshed: %d tickers total", len(self.watchlist))
+            log.info("   Core    : %s", core[:10])
+            log.info("   Dynamic : %s", added if added else "none added")
+            log.info("   Full    : %s", self.watchlist)
+            log.info("─" * 65)
 
         except Exception as e:
-            log.error("Watchlist refresh failed: %s — keeping previous", e)
+            log.error("Watchlist refresh failed: %s — keeping previous list", e)
+            log.info("   Current : %s", self.watchlist)
 
     # ─────────────────────────────────────────────────────────────
     # CORE CYCLE
     # ─────────────────────────────────────────────────────────────
 
     def run_cycle(self):
-        from datetime import datetime
-        import pytz
-
         # Skip weekends
-        et = pytz.timezone("America/New_York")
-        now = datetime.now(et)
-        if now.weekday() >= 5:
-            log.info("📅 Weekend — market closed.")
+        now_et = datetime.now(ET)
+        if now_et.weekday() >= 5:
+            log.info("📅 Weekend — skipping cycle.")
             return
 
         if not self.broker.is_market_open():
-            log.info("🔒 Market closed.")
+            log.info("🔒 Market closed — skipping cycle.")
             return
 
         self.cycle_count += 1
         log.info("━" * 65)
         log.info(
-            "📊 Cycle #%d  |  %s",
+            "📊 Cycle #%d  |  %s ET  |  Watching %d tickers",
             self.cycle_count,
-            datetime.now().strftime("%H:%M:%S ET"),
+            now_et.strftime("%H:%M:%S"),
+            len(self.watchlist),
         )
 
         # 1. Portfolio snapshot
@@ -163,7 +165,6 @@ class TradingBot:
             daily_pl,
             len(open_positions),
         )
-
         if open_symbols:
             log.info("   Holding: %s", open_symbols)
 
@@ -185,7 +186,7 @@ class TradingBot:
         if not market_data:
             log.warning("⚠️  No market data — skipping cycle.")
             return
-        log.info("📡 Data for %d tickers", len(market_data))
+        log.info("📡 Data received for %d tickers", len(market_data))
 
         # 5. Stock brain
         log.info("🧠 Stock brain analyzing...")
@@ -202,8 +203,9 @@ class TradingBot:
         atrs = {t: d.get("atr_14", 0) for t, d in market_data.items()}
         stopped = self.risk.update_trailing_stops(prices, atrs)
         for ticker in stopped:
-            log.info("🛑 Trailing stop — closing %s", ticker)
-            self.broker.close_position(ticker)
+            log.info("🛑 Trailing stop hit — closing %s", ticker)
+            if not self.dry_run:
+                self.broker.close_position(ticker)
 
     # ─────────────────────────────────────────────────────────────
     # STOCK LAYER
@@ -216,32 +218,37 @@ class TradingBot:
         reason = (decision.get("reason") or "")[:80]
 
         log.info(
-            "📈 Stock decision: %s %s  conf=%.0f%%  |  %s",
+            "📈 Stock: %s %s  conf=%.0f%%  |  %s",
             action.upper(),
             ticker,
             conf * 100,
             reason,
         )
 
-        # Hold — nothing to do
         if action == "hold":
             self.db.log_decision(decision, "HOLD")
             return
 
-        # ── Already holding this ticker — skip ────────────────
+        # Already holding — skip
         if action == "buy" and ticker in open_symbols:
-            log.info("⏭️  Already holding %s — skipping to avoid repeat buy", ticker)
+            log.info("⏭️  Already holding %s — skipping repeat buy", ticker)
             self.db.log_decision(decision, "SKIPPED", "Already in position")
             return
 
-        # ── Risk check ─────────────────────────────────────────
-        ok, reason_blocked = self.risk.approve(decision, portfolio)
+        # Risk check
+        ok, blocked_reason = self.risk.approve(decision, portfolio)
         if not ok:
-            log.info("🛑 Risk blocked: %s", reason_blocked)
-            self.db.log_decision(decision, "BLOCKED", reason_blocked)
+            log.info("🛑 Risk blocked: %s", blocked_reason)
+            self.db.log_decision(decision, "BLOCKED", blocked_reason)
             return
 
-        # ── Execute ────────────────────────────────────────────
+        # Dry run — log but don't execute
+        if self.dry_run:
+            log.info("🧪 DRY RUN — would execute: %s %s", action.upper(), ticker)
+            self.db.log_decision(decision, "DRY_RUN")
+            return
+
+        # Execute
         result = self.broker.execute(decision)
         if result:
             log.info(
@@ -268,7 +275,7 @@ class TradingBot:
             for s in self.options_broker._tracked
         ]
 
-        # Sort candidates by signal strength
+        # Sort by signal strength — strongest first
         bias_order = {
             "STRONG_BUY": 5,
             "BUY": 4,
@@ -295,11 +302,10 @@ class TradingBot:
 
         traded = 0
         for ticker, stock_data in candidates:
-            # Max 2 options trades per cycle
             if traded >= 2:
                 break
 
-            # ── Already have options on this ticker — skip ─────
+            # Already have options on this ticker
             if ticker in open_option_tickers:
                 log.info("⏭️  Already have options on %s — skipping", ticker)
                 continue
@@ -359,6 +365,11 @@ class TradingBot:
                 )
                 continue
 
+            if self.dry_run:
+                log.info("   🧪 DRY RUN — would place: %s %s", strategy, ticker)
+                traded += 1
+                continue
+
             # Execute
             result = self.options_broker.execute_options_trade(opt_dec)
             if result:
@@ -377,7 +388,8 @@ class TradingBot:
             sym = exit_info["symbol"]
             reason = exit_info["reason"]
             log.info("🔔 Auto-exit: %s | %s", sym, reason)
-            self.options_broker.close_option(sym)
+            if not self.dry_run:
+                self.options_broker.close_option(sym)
             self.db.log_decision(
                 {
                     "action": "sell",
@@ -395,13 +407,18 @@ class TradingBot:
     # ─────────────────────────────────────────────────────────────
 
     def end_of_day(self):
-        log.info("🔔 3:45 PM — end of day cleanup...")
-        self.options_broker.close_all_options()
-        if self.config.CLOSE_EOD:
-            portfolio = self.broker.get_portfolio()
-            for pos in portfolio.get("positions", []):
-                self.broker.close_position(pos["symbol"])
-            self.broker.cancel_all()
+        # Only run on weekdays
+        if datetime.now(ET).weekday() >= 5:
+            return
+
+        log.info("🔔 End of day — closing all positions...")
+        if not self.dry_run:
+            self.options_broker.close_all_options()
+            if self.config.CLOSE_EOD:
+                portfolio = self.broker.get_portfolio()
+                for pos in portfolio.get("positions", []):
+                    self.broker.close_position(pos["symbol"])
+                self.broker.cancel_all()
         self.db.print_summary()
         log.info("✅ End-of-day done.")
 
@@ -412,24 +429,36 @@ class TradingBot:
     def start(self):
         log.info("🚀 Bot running. Press Ctrl+C to stop.")
 
-        # Times in UTC (9:31 AM ET = 13:31 UTC, 3:45 PM ET = 19:45 UTC)
-        schedule.every().day.at("13:31").do(self.refresh_watchlist)  # 9:31 AM ET
-        schedule.every().day.at("19:45").do(self.end_of_day)         # 3:45 PM ET
+        # ── Always refresh watchlist on startup ───────────────
+        # This runs regardless of market hours so you always
+        # see the Core + Dynamic log on every bot start
+        self.refresh_watchlist()
+
+        # ── Schedule jobs ─────────────────────────────────────
+        # Times are UTC — server should be set to UTC
+        # 9:31 AM ET = 13:31 UTC (EST) / 14:31 UTC (EDT)
+        # 3:45 PM ET = 19:45 UTC (EST) / 20:45 UTC (EDT)
+        schedule.every().day.at("13:31").do(self.refresh_watchlist)
+        schedule.every().day.at("19:45").do(self.end_of_day)
+        schedule.every(2).hours.do(self.refresh_watchlist)
         schedule.every(self.config.CYCLE_MINUTES).minutes.do(self.run_cycle)
 
+        # ── Run first cycle if market is open ─────────────────
         if self.broker.is_market_open():
-            self.refresh_watchlist()
+            log.info("📈 Market is open — running first cycle now.")
             self.run_cycle()
         else:
-            log.info("⏳ Market closed. Bot standing by...")
+            log.info("⏳ Market closed. Bot standing by for next open.")
 
+        # ── Main loop ─────────────────────────────────────────
         while True:
             try:
                 schedule.run_pending()
                 time.sleep(30)
             except KeyboardInterrupt:
                 log.info("\n⛔ Stopped by user.")
-                self.options_broker.close_all_options()
+                if not self.dry_run:
+                    self.options_broker.close_all_options()
                 self.db.print_summary()
                 break
             except Exception as e:
@@ -440,8 +469,13 @@ class TradingBot:
 # ── Entry Point ────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import sys
-    parser = argparse.ArgumentParser(description="Start the Claude trading bot.")
-    parser.add_argument("--dry-run", action="store_true", help="Run without submitting any live orders.")
+
+    parser = argparse.ArgumentParser(description="Claude Trading Bot")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run without submitting any live orders.",
+    )
     args = parser.parse_args()
 
     try:
