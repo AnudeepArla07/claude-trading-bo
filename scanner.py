@@ -4,6 +4,7 @@ scanner.py
 Dynamic watchlist generator. Scans market every morning.
 Python 3.9 compatible.
 """
+
 import logging
 from typing import List
 
@@ -19,8 +20,8 @@ class MarketScanner:
             self.api = tradeapi.REST(
                 config.ALPACA_API_KEY,
                 config.ALPACA_SECRET_KEY,
-                base_url    = config.ALPACA_BASE_URL,
-                api_version = "v2"
+                base_url=config.ALPACA_BASE_URL,
+                api_version="v2",
             )
         except Exception as e:
             log.error("Scanner init failed: %s", e)
@@ -42,24 +43,63 @@ class MarketScanner:
     def scan_volume_leaders(self) -> List[str]:
         try:
             symbols = [
-                "AAPL","MSFT","NVDA","AMD","TSLA","META","AMZN","GOOGL",
-                "SPY","QQQ","SOFI","PLTR","RIVN","NIO","BABA","UBER","LYFT"
+                "AAPL",
+                "MSFT",
+                "NVDA",
+                "AMD",
+                "TSLA",
+                "META",
+                "AMZN",
+                "GOOGL",
+                "SPY",
+                "QQQ",
+                "SOFI",
+                "PLTR",
+                "RIVN",
+                "NIO",
+                "BABA",
+                "UBER",
+                "LYFT",
             ]
-            snaps   = self.api.get_snapshots(symbols)
-            return [t for t, s in snaps.items()
-                    if s and s.daily_bar and s.daily_bar.v > 5_000_000]
+            snaps = self.api.get_snapshots(symbols)
+            return [
+                t
+                for t, s in snaps.items()
+                if s and s.daily_bar and s.daily_bar.v > 5_000_000
+            ]
         except Exception as e:
-            log.error("Volume scan: %s", e); return []
+            log.error("Volume scan: %s", e)
+            return []
 
     def scan_gap_ups(self) -> List[str]:
         try:
             symbols = [
-                "AAPL","MSFT","GOOGL","NVDA","TSLA","META","AMZN",
-                "AMD","NFLX","CRM","ORCL","ADBE","SHOP","UBER","PLTR",
-                "SOFI","RIVN","NIO","BABA","JD","PDD","MSTR","COIN"
+                "AAPL",
+                "MSFT",
+                "GOOGL",
+                "NVDA",
+                "TSLA",
+                "META",
+                "AMZN",
+                "AMD",
+                "NFLX",
+                "CRM",
+                "ORCL",
+                "ADBE",
+                "SHOP",
+                "UBER",
+                "PLTR",
+                "SOFI",
+                "RIVN",
+                "NIO",
+                "BABA",
+                "JD",
+                "PDD",
+                "MSTR",
+                "COIN",
             ]
             snaps = self.api.get_snapshots(symbols)
-            gaps  = []
+            gaps = []
             for t, s in snaps.items():
                 if s and s.daily_bar and s.prev_daily_bar:
                     prev = s.prev_daily_bar.c
@@ -69,13 +109,27 @@ class MarketScanner:
                             gaps.append(t)
             return gaps
         except Exception as e:
-            log.error("Gap scan: %s", e); return []
+            log.error("Gap scan: %s", e)
+            return []
 
     def scan_momentum(self) -> List[str]:
         try:
             symbols = [
-                "NVDA","MSFT","AAPL","META","GOOGL","AMZN","TSLA",
-                "AVGO","LLY","JPM","V","MA","UNH","XOM","JNJ"
+                "NVDA",
+                "MSFT",
+                "AAPL",
+                "META",
+                "GOOGL",
+                "AMZN",
+                "TSLA",
+                "AVGO",
+                "LLY",
+                "JPM",
+                "V",
+                "MA",
+                "UNH",
+                "XOM",
+                "JNJ",
             ]
             snaps = self.api.get_snapshots(symbols)
             movers = []
@@ -86,16 +140,23 @@ class MarketScanner:
                         movers.append(t)
             return movers
         except Exception as e:
-            log.error("Momentum scan: %s", e); return []
+            log.error("Momentum scan: %s", e)
+            return []
 
     def scan_sector_rotation(self) -> List[str]:
         sector_map = {
-            "XLK": ["AAPL","MSFT","NVDA","AVGO","AMD"],
-            "XLF": ["JPM","BAC","WFC","GS","MS"],
-            "XLE": ["XOM","CVX","COP","EOG","SLB"],
-            "XLV": ["UNH","JNJ","LLY","ABBV","MRK"],
-            "XLY": ["AMZN","TSLA","HD","MCD","SBUX"],
-            "XBI": ["MRNA","BNTX","REGN","VRTX","GILD"],
+            "XLK": ["AAPL", "MSFT", "NVDA", "AVGO", "AMD"],
+            "XLF": ["JPM", "BAC", "WFC", "GS", "MS"],
+            "XLE": ["XOM", "CVX", "COP", "EOG", "SLB"],
+            "XLV": ["UNH", "JNJ", "LLY", "ABBV", "MRK"],
+            "XLY": ["AMZN", "TSLA", "HD", "MCD", "SBUX"],
+            "XBI": ["MRNA", "BNTX", "REGN", "VRTX", "GILD"],
+            # Add these for more coverage
+            "XLI": ["CAT", "DE", "BA", "GE", "HON"],  # Industrials
+            "XLC": ["META", "GOOGL", "NFLX", "DIS", "SNAP"],  # Communication
+            "XLRE": ["AMT", "PLD", "CCI", "EQIX", "PSA"],  # Real Estate
+            "GLD": ["NEM", "GOLD", "AEM", "WPM", "KGC"],  # Gold miners
+            "ARKK": ["TSLA", "COIN", "ROKU", "ZM", "SQ"],  # Innovation/ARK
         }
         try:
             snaps = self.api.get_snapshots(list(sector_map.keys()))
@@ -106,54 +167,72 @@ class MarketScanner:
                     if prev > 0:
                         chg = (s.daily_bar.c - prev) / prev
                         if chg > best_chg:
-                            best_chg = chg; best_etf = etf
+                            best_chg = chg
+                            best_etf = etf
             if best_etf and best_chg > 0:
-                log.info("🔥 Hottest sector: %s (+%.2f%%)", best_etf, best_chg*100)
+                log.info("🔥 Hottest sector: %s (+%.2f%%)", best_etf, best_chg * 100)
                 return sector_map[best_etf]
             return []
         except Exception as e:
-            log.error("Sector scan: %s", e); return []
+            log.error("Sector scan: %s", e)
+            return []
 
     def scan_earnings_movers(self) -> List[str]:
         try:
             news = self.api.get_news(symbol=None, limit=50)
-            kws  = ["earnings beat","revenue beat","raised guidance",
-                    "record revenue","topped estimates"]
+            kws = [
+                "earnings beat",
+                "revenue beat",
+                "raised guidance",
+                "record revenue",
+                "topped estimates",
+            ]
             tickers = []
             for item in news:
                 if any(k in item.headline.lower() for k in kws):
                     tickers.extend(item.symbols or [])
             return list(set(tickers))[:5]
         except Exception as e:
-            log.warning("Earnings scan: %s", e); return []
+            log.warning("Earnings scan: %s", e)
+            return []
 
     def rank_candidates(self, tickers: List[str]) -> List[str]:
         if not tickers:
             return []
         try:
-            snaps  = self.api.get_snapshots(tickers)
+            snaps = self.api.get_snapshots(tickers)
             scored = []
             for t, s in snaps.items():
                 if not s or not s.daily_bar or not s.prev_daily_bar:
                     continue
-                price  = s.daily_bar.c
-                vol    = s.daily_bar.v
-                prev   = s.prev_daily_bar.c
-                chg    = (price - prev) / prev if prev > 0 else 0
-                score  = 0
-                if vol > 10_000_000:  score += 30
-                elif vol > 5_000_000: score += 20
-                elif vol > 1_000_000: score += 10
-                if chg > 0.03:   score += 25
-                elif chg > 0.01: score += 15
-                elif chg < 0:    score -= 20
-                if 10 < price < 500: score += 15
-                elif price > 500:    score -= 10
-                elif price < 5:      score -= 20
+                price = s.daily_bar.c
+                vol = s.daily_bar.v
+                prev = s.prev_daily_bar.c
+                chg = (price - prev) / prev if prev > 0 else 0
+                score = 0
+                if vol > 10_000_000:
+                    score += 30
+                elif vol > 5_000_000:
+                    score += 20
+                elif vol > 1_000_000:
+                    score += 10
+                if chg > 0.03:
+                    score += 25
+                elif chg > 0.01:
+                    score += 15
+                elif chg < 0:
+                    score -= 20
+                if 10 < price < 500:
+                    score += 15
+                elif price > 500:
+                    score -= 10
+                elif price < 5:
+                    score -= 20
                 scored.append((t, score))
             scored.sort(key=lambda x: x[1], reverse=True)
             ranked = [t for t, _ in scored]
             log.info("🏆 Top watchlist: %s", ranked[:10])
             return ranked
         except Exception as e:
-            log.error("Ranking failed: %s", e); return tickers
+            log.error("Ranking failed: %s", e)
+            return tickers
