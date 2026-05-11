@@ -5,6 +5,7 @@ Aggressive Claude AI stock trading decision engine.
 Feeds full technical indicator suite across 3 timeframes.
 Python 3.9 compatible.
 """
+
 import json
 import logging
 import re
@@ -52,23 +53,24 @@ RESPOND WITH STRICT JSON ONLY — no prose, no markdown:
 
 class ClaudeBrain:
     def __init__(self, config):
-        self.config  = config
-        self.client  = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+        self.config = config
+        self.client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
         self._history: List[dict] = []
 
-    def analyze(self, portfolio: dict, market_data: dict,
-                 news: List[dict]) -> Optional[dict]:
+    def analyze(
+        self, portfolio: dict, market_data: dict, news: List[dict]
+    ) -> Optional[dict]:
         prompt = self._build_prompt(portfolio, market_data, news)
         for attempt in range(2):
             try:
                 resp = self.client.messages.create(
-                    model      = self.config.MODEL,
-                    max_tokens = self.config.MAX_TOKENS,
-                    system     = SYSTEM_PROMPT,
-                    messages   = [{"role": "user", "content": prompt}]
+                    model=self.config.MODEL,
+                    max_tokens=self.config.MAX_TOKENS,
+                    system=SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": prompt}],
                 )
                 raw = re.sub(r"```json|```", "", resp.content[0].text).strip()
-                d   = json.loads(raw)
+                d = json.loads(raw)
                 self._validate(d)
                 self._history.append(d)
                 if len(self._history) > 20:
@@ -84,12 +86,13 @@ class ClaudeBrain:
                 log.error("Stock brain error: %s", e)
                 return None
 
-    def _build_prompt(self, portfolio: dict, market_data: dict,
-                       news: List[dict]) -> str:
-        equity   = portfolio.get("equity", 0)
-        cash     = portfolio.get("cash", 0)
+    def _build_prompt(
+        self, portfolio: dict, market_data: dict, news: List[dict]
+    ) -> str:
+        equity = portfolio.get("equity", 0)
+        cash = portfolio.get("cash", 0)
         daily_pl = portfolio.get("daily_pl", 0)
-        pct      = (daily_pl / equity * 100) if equity else 0
+        pct = (daily_pl / equity * 100) if equity else 0
 
         lines = [
             "═══ PORTFOLIO ═══",
@@ -98,38 +101,44 @@ class ClaudeBrain:
             f"Open positions: {len(portfolio.get('positions',[]))}",
         ]
         for p in portfolio.get("positions", []):
-            lines.append(f"  {p['symbol']}: {p['qty']:.0f} shares | "
-                         f"entry ${p['avg_entry']:.2f} | now ${p['current_price']:.2f} | "
-                         f"P&L ${p['unrealized_pl']:+.2f}")
+            lines.append(
+                f"  {p['symbol']}: {p['qty']:.0f} shares | "
+                f"entry ${p['avg_entry']:.2f} | now ${p['current_price']:.2f} | "
+                f"P&L ${p['unrealized_pl']:+.2f}"
+            )
 
         # Sort by signal strength
-        order = {"STRONG_BUY": 0, "BUY": 1, "NEUTRAL": 2,
-                 "SELL": 3, "STRONG_SELL": 4}
+        order = {"STRONG_BUY": 0, "BUY": 1, "NEUTRAL": 2, "SELL": 3, "STRONG_SELL": 4}
         sorted_data = sorted(
             market_data.items(),
-            key=lambda x: order.get(x[1].get("signals", {}).get("bias", "NEUTRAL"), 2)
+            key=lambda x: order.get(x[1].get("signals", {}).get("bias", "NEUTRAL"), 2),
         )
 
         lines.append("\n═══ MARKET DATA ═══")
         for ticker, d in sorted_data:
-            sig    = d.get("signals", {})
-            bias   = sig.get("bias", "NEUTRAL")
-            icon   = {"STRONG_BUY": "🟢🟢", "BUY": "🟢",
-                      "NEUTRAL": "⚪", "SELL": "🔴", "STRONG_SELL": "🔴🔴"}.get(bias, "⚪")
-            rsi    = d.get("rsi_14")
-            rsi5m  = d.get("rsi_5m")
-            macd   = d.get("macd", {}) or {}
-            bb     = d.get("bb", {}) or {}
-            atr    = d.get("atr_14")
-            vr     = d.get("vol_ratio") or 1.0
+            sig = d.get("signals", {})
+            bias = sig.get("bias", "NEUTRAL")
+            icon = {
+                "STRONG_BUY": "🟢🟢",
+                "BUY": "🟢",
+                "NEUTRAL": "⚪",
+                "SELL": "🔴",
+                "STRONG_SELL": "🔴🔴",
+            }.get(bias, "⚪")
+            rsi = d.get("rsi_14")
+            rsi5m = d.get("rsi_5m")
+            macd = d.get("macd", {}) or {}
+            bb = d.get("bb", {}) or {}
+            atr = d.get("atr_14")
+            vr = d.get("vol_ratio") or 1.0
             regime = d.get("market_regime", "?")
-            mom5d  = d.get("momentum_5d") or 0.0
-            price  = d.get("price", 0)
-            chg    = d.get("change_pct", 0)
+            mom5d = d.get("momentum_5d") or 0.0
+            price = d.get("price", 0)
+            chg = d.get("change_pct", 0)
 
             # Suggested levels
-            stop_sug = round(price - (atr or 0) * 1.5,  2) if atr else "N/A"
-            tp_sug   = round(price + (atr or 0) * 3.75, 2) if atr else "N/A"
+            stop_sug = round(price - (atr or 0) * 1.5, 2) if atr else "N/A"
+            tp_sug = round(price + (atr or 0) * 3.75, 2) if atr else "N/A"
 
             lines.append(
                 f"\n{icon} {ticker}  ${price:.2f} ({chg:+.2f}%)  BIAS={bias}  "
@@ -151,8 +160,10 @@ class ClaudeBrain:
         if self._history:
             lines.append("\n═══ RECENT DECISIONS ═══")
             for h in self._history[-4:]:
-                lines.append(f"  {h.get('action','?').upper()} {h.get('ticker','?')} "
-                              f"conf={h.get('confidence',0):.0%}")
+                lines.append(
+                    f"  {h.get('action','?').upper()} {h.get('ticker','?')} "
+                    f"conf={h.get('confidence',0):.0%}"
+                )
 
         lines.append(
             "\n═══ TASK ═══\n"
@@ -170,5 +181,5 @@ class ClaudeBrain:
                 raise ValueError(f"Missing field: {f}")
         if d["action"] not in ("buy", "sell", "hold"):
             raise ValueError(f"Bad action: {d['action']}")
-        d["quantity"]   = int(d["quantity"])
+        d["quantity"] = int(d["quantity"])
         d["confidence"] = float(d["confidence"])
