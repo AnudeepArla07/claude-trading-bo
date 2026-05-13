@@ -39,7 +39,7 @@ def validate_config() -> None:
         "ALPACA_API_KEY": "Alpaca API key from https://alpaca.markets",
         "ALPACA_SECRET_KEY": "Alpaca secret key from https://alpaca.markets",
     }
-    
+
     for key, desc in required_keys.items():
         value = os.getenv(key, "")
         if not value or value.startswith("YOUR_"):

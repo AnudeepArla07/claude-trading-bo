@@ -76,7 +76,7 @@ class RiskManager:
                 return False, f"Invalid confidence {conf} (must be 0-1)"
         except (TypeError, ValueError) as e:
             return False, f"Confidence parsing error: {e}"
-        
+
         minimum = self.config.MIN_CONFIDENCE
         if self._consecutive_losses >= 2:
             minimum = min(minimum + 0.05 * self._consecutive_losses, 0.90)
@@ -93,12 +93,12 @@ class RiskManager:
             entry = decision.get("entry_price") or decision.get("price")
             stop = decision.get("stop_loss")
             target = decision.get("take_profit")
-            
+
             if rr is not None:
                 rr = float(rr)
                 if rr < self.config.MIN_RISK_REWARD:
                     return False, f"R:R {rr:.1f} < min {self.config.MIN_RISK_REWARD}"
-            
+
             if entry and stop and target and decision.get("action") == "buy":
                 entry = float(entry)
                 stop = float(stop)
@@ -113,7 +113,7 @@ class RiskManager:
                         )
         except (TypeError, ValueError) as e:
             return False, f"Risk/reward parsing error: {e}"
-        
+
         return True, ""
 
     def _check_trend_alignment(self, decision: dict) -> Tuple[bool, str]:

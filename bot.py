@@ -58,6 +58,7 @@ class TradingBot:
 
         # Validate configuration before initializing
         from config import validate_config
+
         try:
             validate_config()
             log.info("✅ Configuration validated")
@@ -89,7 +90,7 @@ class TradingBot:
 
         log.info("✅ All systems ready.")
         log.info("📋 Starting watchlist: %s", self.watchlist)
-        
+
         # Reconcile positions with broker on startup
         self._reconcile_positions()
 
@@ -101,8 +102,10 @@ class TradingBot:
         """Reconcile position manager with broker positions on startup."""
         try:
             portfolio = self.broker.get_portfolio()
-            missing, extra = self.positions.reconcile_with_broker(portfolio.get("positions", []))
-            
+            missing, extra = self.positions.reconcile_with_broker(
+                portfolio.get("positions", [])
+            )
+
             if extra:
                 log.info("📌 Registering %d new positions from broker", len(extra))
                 for pos in portfolio.get("positions", []):
@@ -127,13 +130,15 @@ class TradingBot:
         """Check for unfilled orders older than 5 minutes and cancel them."""
         now = time.time()
         timeout = 5 * 60  # 5 minutes
-        
+
         for symbol in list(self._unfilled_orders.keys()):
             age = now - self._unfilled_orders[symbol]
             if age > timeout:
-                log.warning("🚫 Order for %s unfilled for %.0f seconds, cancelling", symbol, age)
+                log.warning(
+                    "🚫 Order for %s unfilled for %.0f seconds, cancelling", symbol, age
+                )
                 try:
-                    self.broker.api.cancel_all_orders()  # Simple cancel all approach
+                    self.broker.cancel_all()  # uses the wrapper you already have
                     del self._unfilled_orders[symbol]
                 except Exception as e:
                     log.error("Cancel failed for %s: %s", symbol, e)
@@ -381,44 +386,19 @@ class TradingBot:
                 pl_pct,
             )
 
-            # Up 1% — move stop to breakeven
-            if pl_pct >= 1.0:
-                breakeven = round(entry * 1.001, 2)
-                log.info(
-                    "   📈 %s +%.1f%% — breakeven stop at $%.2f",
-                    ticker,
-                    pl_pct,
-                    breakeven,
-                )
-                # Register with live feed if available
-                if self.live_feed and atr:
-                    self.live_feed.register_position(
-                        symbol=ticker,
-                        entry_price=entry,
-                        stop_loss=breakeven,
-                        take_profit=entry + atr * 3.75,
-                        atr=atr,
-                        qty=int(pos["qty"]),
-                    )
+            # CORRECT — check bigger threshold first
 
-            # Up 2% — lock in 1%
-            elif pl_pct >= 2.0:
-                lock = round(entry * 1.01, 2)
-                log.info(
-                    "   🔒 %s +%.1f%% — locking 1%% at $%.2f",
-                    ticker,
-                    pl_pct,
-                    lock,
-                )
 
-            # Down more than 1.5x ATR — consider exiting
-            elif atr and (entry - current) > atr * 1.5:
-                log.info(
-                    "   ⚠️  %s down $%.2f > 1.5x ATR=$%.2f",
-                    ticker,
-                    entry - current,
-                    atr,
-                )
+if pl_pct >= 2.0:  # check 2% first
+    lock = round(entry * 1.01, 2)
+    log.info("🔒 %s +%.1f%% — locking 1%% at $%.2f", ticker, pl_pct, lock)
+elif pl_pct >= 1.0:  # then 1%
+    breakeven = round(entry * 1.001, 2)
+    log.info("📈 %s +%.1f%% — breakeven stop at $%.2f", ticker, pl_pct, breakeven)
+    if self.live_feed and atr:
+        self.live_feed.register_position(...)
+elif atr and (entry - current) > atr * 1.5:
+    log.info("⚠️  %s down $%.2f > 1.5x ATR=$%.2f", ticker, entry - current, atr)
 
     # ─────────────────────────────────────────────────────────────
     # STOCK LAYER

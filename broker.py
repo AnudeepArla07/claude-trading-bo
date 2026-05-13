@@ -33,7 +33,7 @@ def _retry_api_call(func, max_retries=MAX_RETRIES):
         except Exception as e:
             if attempt == max_retries - 1:
                 raise
-            backoff = min(BASE_BACKOFF * (2 ** attempt), MAX_BACKOFF)
+            backoff = min(BASE_BACKOFF * (2**attempt), MAX_BACKOFF)
             log.warning(
                 "API call failed (attempt %d/%d), retrying in %.1fs: %s",
                 attempt + 1,
@@ -66,6 +66,7 @@ class AlpacaBroker:
 
     def get_portfolio(self) -> dict:
         try:
+
             def fetch_portfolio():
                 acct = self.api.get_account()
                 positions = self.api.list_positions()
@@ -89,7 +90,7 @@ class AlpacaBroker:
                     "buying_power": float(acct.buying_power),
                     "positions": pos_list,
                 }
-            
+
             return _retry_api_call(fetch_portfolio)
         except Exception as e:
             log.error("Portfolio fetch failed after retries: %s", e)
@@ -128,6 +129,7 @@ class AlpacaBroker:
 
         try:
             if action == "buy" and stop and target:
+
                 def submit_bracket_order():
                     order = self.api.submit_order(
                         symbol=ticker,
@@ -140,8 +142,10 @@ class AlpacaBroker:
                         take_profit={"limit_price": round(target, 2)},
                     )
                     return order
+
                 order = _retry_api_call(submit_bracket_order)
             else:
+
                 def submit_simple_order():
                     order = self.api.submit_order(
                         symbol=ticker,
@@ -151,8 +155,9 @@ class AlpacaBroker:
                         time_in_force="day",
                     )
                     return order
+
                 order = _retry_api_call(submit_simple_order)
-            
+
             return {
                 "order_id": order.id,
                 "symbol": order.symbol,
@@ -162,7 +167,9 @@ class AlpacaBroker:
                 "submitted": str(order.submitted_at),
             }
         except Exception as e:
-            log.error("Order failed after retries [%s %s x%d]: %s", action, ticker, qty, e)
+            log.error(
+                "Order failed after retries [%s %s x%d]: %s", action, ticker, qty, e
+            )
             return None
 
     def close_position(self, ticker: str):

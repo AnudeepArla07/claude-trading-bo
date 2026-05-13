@@ -160,7 +160,7 @@ class PositionManager:
         """
         Check position state against current price.
         Returns: (exit_reason, pl_pct) or (None, pl_pct) if no exit
-        
+
         Exit reasons:
         - "stop_loss": hard stop hit
         - "profit_target": take profit hit
@@ -198,7 +198,8 @@ class PositionManager:
 
             # Check time stop (2 hours, flat/losing)
             now = datetime.now(ET)
-            held_hr = (now - entry_tm).seconds / 3600
+            # CORRECT — total_seconds() handles any duration
+            held_hr = (now - entry_tm).total_seconds() / 3600
             if held_hr > 2.0 and pl_pct < 0.5:
                 return f"time_stop (held {held_hr:.1f}hr at {pl_pct:.1f}%)", pl_pct
 
@@ -286,11 +287,13 @@ class PositionManager:
     # RECONCILIATION
     # ─────────────────────────────────────────────────────────────
 
-    def reconcile_with_broker(self, broker_positions: List[dict]) -> Tuple[List[str], List[str]]:
+    def reconcile_with_broker(
+        self, broker_positions: List[dict]
+    ) -> Tuple[List[str], List[str]]:
         """
         Reconcile internal positions with broker positions.
         Returns (missing_symbols, extra_symbols)
-        
+
         missing: positions we have but broker doesn't (stale)
         extra: positions broker has but we don't (need to register)
         """

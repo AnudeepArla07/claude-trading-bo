@@ -151,15 +151,15 @@ class TradeDatabase:
         with _db_lock:
             with self._conn() as conn:
                 stock_trades = conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
-                opt_trades = conn.execute("SELECT COUNT(*) FROM options_trades").fetchone()[
-                    0
-                ]
+                opt_trades = conn.execute(
+                    "SELECT COUNT(*) FROM options_trades"
+                ).fetchone()[0]
                 blocked = conn.execute(
                     "SELECT COUNT(*) FROM decisions WHERE status='BLOCKED'"
                 ).fetchone()[0]
-                total_decisions = conn.execute("SELECT COUNT(*) FROM decisions").fetchone()[
-                    0
-                ]
+                total_decisions = conn.execute(
+                    "SELECT COUNT(*) FROM decisions"
+                ).fetchone()[0]
         print(f"\n{'─'*45}")
         print(f"  📊 SESSION SUMMARY")
         print(f"  Decisions analyzed : {total_decisions}")

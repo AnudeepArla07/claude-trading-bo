@@ -66,7 +66,7 @@ class ClaudeBrain:
         self, portfolio: dict, market_data: dict, news: List[dict]
     ) -> Optional[dict]:
         prompt = self._build_prompt(portfolio, market_data, news)
-        
+
         for api_retry in range(MAX_RETRIES):
             for json_retry in range(2):
                 try:
@@ -92,7 +92,7 @@ class ClaudeBrain:
                 except (anthropic.APIConnectionError, anthropic.RateLimitError) as e:
                     # Retryable API errors
                     if api_retry < MAX_RETRIES - 1:
-                        backoff = BASE_BACKOFF * (2 ** api_retry)
+                        backoff = BASE_BACKOFF * (2**api_retry)
                         log.warning(
                             "Claude API error (retry %d/%d in %.1fs): %s",
                             api_retry + 1,
@@ -108,7 +108,7 @@ class ClaudeBrain:
                 except Exception as e:
                     log.error("Stock brain error: %s", e)
                     return None
-        
+
         return None
 
     def _build_prompt(
