@@ -386,19 +386,34 @@ class TradingBot:
                 pl_pct,
             )
 
-            # CORRECT — check bigger threshold first
-
-
-if pl_pct >= 2.0:  # check 2% first
-    lock = round(entry * 1.01, 2)
-    log.info("🔒 %s +%.1f%% — locking 1%% at $%.2f", ticker, pl_pct, lock)
-elif pl_pct >= 1.0:  # then 1%
-    breakeven = round(entry * 1.001, 2)
-    log.info("📈 %s +%.1f%% — breakeven stop at $%.2f", ticker, pl_pct, breakeven)
-    if self.live_feed and atr:
-        self.live_feed.register_position(...)
-elif atr and (entry - current) > atr * 1.5:
-    log.info("⚠️  %s down $%.2f > 1.5x ATR=$%.2f", ticker, entry - current, atr)
+            # Check profit levels for stop management
+            if pl_pct >= 2.0:  # check 2% first
+                lock = round(entry * 1.01, 2)
+                log.info("🔒 %s +%.1f%% — locking 1%% at $%.2f", ticker, pl_pct, lock)
+                # Update position manager with locked profit stop
+                self.positions.update_stop(ticker, lock)
+            elif pl_pct >= 1.0:  # then 1%
+                breakeven = round(entry * 1.001, 2)
+                log.info(
+                    "📈 %s +%.1f%% — breakeven stop at $%.2f", ticker, pl_pct, breakeven
+                )
+                # Update position manager with breakeven stop
+                self.positions.update_stop(ticker, breakeven)
+                if self.live_feed and atr:
+                    # Register/update with live feed for real-time monitoring
+                    self.live_feed.register_position(
+                        symbol=ticker,
+                        entry_price=entry,
+                        stop_loss=breakeven,
+                        take_profit=current + atr * 2,
+                        atr=atr,
+                        qty=int(pos.get("qty", 1)),
+                        side="long",
+                    )
+            elif atr and (entry - current) > atr * 1.5:
+                log.info(
+                    "⚠️  %s down $%.2f > 1.5x ATR=$%.2f", ticker, entry - current, atr
+                )
 
     # ─────────────────────────────────────────────────────────────
     # STOCK LAYER
