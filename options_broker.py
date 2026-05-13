@@ -211,7 +211,7 @@ class OptionsBroker:
     def _validate_symbol(self, symbol: str) -> Optional[str]:
         """Verify symbol exists on Alpaca. Find nearest if not."""
         try:
-            url = f"https://paper-api.alpaca.markets/v2/options/contracts/{symbol}"
+            url = f"{self.config.ALPACA_BASE_URL}/v2/options/contracts/{symbol}"
             resp = requests.get(url, headers=self.headers, timeout=5)
             if resp.status_code == 200:
                 log.info("   ✅ Symbol validated: %s", symbol)
@@ -244,7 +244,7 @@ class OptionsBroker:
                 strike,
             )
 
-            url = "https://paper-api.alpaca.markets/v2/options/contracts"
+            url = f"{self.config.ALPACA_BASE_URL}/v2/options/contracts"
             params = {
                 "underlying_symbols": ticker,
                 "expiration_date": expiry,
