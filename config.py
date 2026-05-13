@@ -25,6 +25,31 @@ def _load_env_file(path: str) -> None:
 _load_env_file(os.path.join(os.path.dirname(__file__), ".env"))
 
 
+def _mask_key(key: str) -> str:
+    """Mask API key for safe logging (show first and last 4 chars)."""
+    if not key or len(key) <= 8:
+        return "***"
+    return f"{key[:4]}...{key[-4:]}"
+
+
+def validate_config() -> None:
+    """Validate all required API keys are set."""
+    required_keys = {
+        "ANTHROPIC_API_KEY": "Anthropic API key from https://console.anthropic.com",
+        "ALPACA_API_KEY": "Alpaca API key from https://alpaca.markets",
+        "ALPACA_SECRET_KEY": "Alpaca secret key from https://alpaca.markets",
+    }
+    
+    for key, desc in required_keys.items():
+        value = os.getenv(key, "")
+        if not value or value.startswith("YOUR_"):
+            raise ValueError(
+                f"❌ {key} not configured!\n"
+                f"   {desc}\n"
+                f"   Set in .env file or environment variable."
+            )
+
+
 class Config:
     # ── API Keys ──────────────────────────────────────────────────────────────
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "YOUR_ANTHROPIC_KEY")

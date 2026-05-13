@@ -1,7 +1,7 @@
 """
 claude_brain.py
 ===============
-Aggressive Claude AI stock trading decision engine.
+Aggressive Claude AI stock trading decision engine with retry logic.
 Feeds full technical indicator suite across 3 timeframes.
 Python 3.9 compatible.
 """
@@ -9,11 +9,16 @@ Python 3.9 compatible.
 import json
 import logging
 import re
+import time
 from typing import Optional, List
 
 import anthropic
 
 log = logging.getLogger(__name__)
+
+# Retry configuration
+MAX_RETRIES = 2
+BASE_BACKOFF = 2  # seconds
 
 SYSTEM_PROMPT = """
 You are an elite quantitative day trader with 20 years of experience.
@@ -61,30 +66,50 @@ class ClaudeBrain:
         self, portfolio: dict, market_data: dict, news: List[dict]
     ) -> Optional[dict]:
         prompt = self._build_prompt(portfolio, market_data, news)
-        for attempt in range(2):
-            try:
-                resp = self.client.messages.create(
-                    model=self.config.MODEL,
-                    max_tokens=self.config.MAX_TOKENS,
-                    system=SYSTEM_PROMPT,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                raw = re.sub(r"```json|```", "", resp.content[0].text).strip()
-                d = json.loads(raw)
-                self._validate(d)
-                self._history.append(d)
-                if len(self._history) > 20:
-                    self._history = self._history[-20:]
-                return d
-            except json.JSONDecodeError:
-                if attempt == 0:
-                    prompt += "\n\nReturn ONLY the JSON object."
-                else:
-                    log.error("Stock brain JSON parse failed.")
+        
+        for api_retry in range(MAX_RETRIES):
+            for json_retry in range(2):
+                try:
+                    resp = self.client.messages.create(
+                        model=self.config.MODEL,
+                        max_tokens=self.config.MAX_TOKENS,
+                        system=SYSTEM_PROMPT,
+                        messages=[{"role": "user", "content": prompt}],
+                    )
+                    raw = re.sub(r"```json|```", "", resp.content[0].text).strip()
+                    d = json.loads(raw)
+                    self._validate(d)
+                    self._history.append(d)
+                    if len(self._history) > 20:
+                        self._history = self._history[-20:]
+                    return d
+                except json.JSONDecodeError as e:
+                    if json_retry == 0:
+                        prompt += "\n\nReturn ONLY the JSON object."
+                    else:
+                        log.error("Stock brain JSON parse failed: %s", e)
+                        break  # Exit json_retry loop to try API retry
+                except (anthropic.APIConnectionError, anthropic.RateLimitError) as e:
+                    # Retryable API errors
+                    if api_retry < MAX_RETRIES - 1:
+                        backoff = BASE_BACKOFF * (2 ** api_retry)
+                        log.warning(
+                            "Claude API error (retry %d/%d in %.1fs): %s",
+                            api_retry + 1,
+                            MAX_RETRIES,
+                            backoff,
+                            str(e)[:100],
+                        )
+                        time.sleep(backoff)
+                    else:
+                        log.error("Stock brain API failed after retries: %s", e)
+                        return None
+                    break  # Exit json_retry loop to try API retry
+                except Exception as e:
+                    log.error("Stock brain error: %s", e)
                     return None
-            except Exception as e:
-                log.error("Stock brain error: %s", e)
-                return None
+        
+        return None
 
     def _build_prompt(
         self, portfolio: dict, market_data: dict, news: List[dict]

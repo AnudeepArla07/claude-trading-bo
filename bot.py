@@ -55,6 +55,15 @@ class TradingBot:
         log.info("🤖  Claude Trading Bot  |  Stocks + Options + Real-Time")
         log.info("=" * 65)
 
+        # Validate configuration before initializing
+        from config import validate_config
+        try:
+            validate_config()
+            log.info("✅ Configuration validated")
+        except ValueError as e:
+            log.error("❌ %s", e)
+            raise
+
         self.config = Config()
         self.dry_run = dry_run
         self.data = MarketDataFeed(self.config)
@@ -71,12 +80,63 @@ class TradingBot:
         self.cycle_count = 0
         self.live_prices: Dict[str, float] = {}
         self.live_feed: Optional[LiveFeed] = None
+        self._last_portfolio: Optional[Dict] = None  # For reconciliation
+        self._unfilled_orders: Dict[str, float] = {}  # Track unfilled order timestamps
 
         if dry_run:
             log.info("⚠️  DRY RUN — no orders will be submitted.")
 
         log.info("✅ All systems ready.")
         log.info("📋 Starting watchlist: %s", self.watchlist)
+        
+        # Reconcile positions with broker on startup
+        self._reconcile_positions()
+
+    # ─────────────────────────────────────────────────────────────
+    # POSITION RECONCILIATION
+    # ─────────────────────────────────────────────────────────────
+
+    def _reconcile_positions(self):
+        """Reconcile live_feed positions with broker positions on startup."""
+        try:
+            portfolio = self.broker.get_portfolio()
+            if portfolio.get("positions"):
+                log.info("📌 Reconciling %d positions from broker", len(portfolio["positions"]))
+                for pos in portfolio["positions"]:
+                    symbol = pos["symbol"]
+                    # Register with live feed if it exists
+                    if self.live_feed and symbol in self.watchlist:
+                        # Estimate ATR and targets from current position
+                        atr = abs(pos["avg_entry"] - pos["current_price"]) * 0.5  # rough estimate
+                        self.live_feed.register_position(
+                            symbol=symbol,
+                            entry_price=pos["avg_entry"],
+                            stop_loss=pos["current_price"] - atr,  # placeholder
+                            take_profit=pos["current_price"] + atr * 2,  # placeholder
+                            atr=atr,
+                            qty=int(pos["qty"]),
+                            side="long",
+                        )
+                        log.info("   ✓ Registered: %s", symbol)
+            else:
+                log.info("✅ No open positions to reconcile")
+        except Exception as e:
+            log.warning("Position reconciliation failed: %s", e)
+
+    def _check_unfilled_orders(self):
+        """Check for unfilled orders older than 5 minutes and cancel them."""
+        now = time.time()
+        timeout = 5 * 60  # 5 minutes
+        
+        for symbol in list(self._unfilled_orders.keys()):
+            age = now - self._unfilled_orders[symbol]
+            if age > timeout:
+                log.warning("🚫 Order for %s unfilled for %.0f seconds, cancelling", symbol, age)
+                try:
+                    self.broker.api.cancel_all_orders()  # Simple cancel all approach
+                    del self._unfilled_orders[symbol]
+                except Exception as e:
+                    log.error("Cancel failed for %s: %s", symbol, e)
 
     # ─────────────────────────────────────────────────────────────
     # LIVE FEED
@@ -206,6 +266,9 @@ class TradingBot:
         if not self.broker.is_market_open():
             log.info("🔒 Market closed.")
             return
+
+        # Check for stale unfilled orders
+        self._check_unfilled_orders()
 
         self.cycle_count += 1
         log.info("━" * 65)

@@ -1,15 +1,47 @@
 """
 broker.py
 =========
-Alpaca stock order execution. Python 3.9 compatible.
+Alpaca stock order execution with retry logic. Python 3.9 compatible.
 """
 
 import logging
+import time
 from datetime import datetime
 from typing import Optional, Dict, Any
 import alpaca_trade_api as tradeapi
 
 log = logging.getLogger(__name__)
+
+# Retry configuration
+MAX_RETRIES = 3
+BASE_BACKOFF = 1  # seconds
+MAX_BACKOFF = 8  # seconds
+
+
+def _mask_key(key: str) -> str:
+    """Mask API key for safe logging."""
+    if not key or len(key) <= 8:
+        return "***"
+    return f"{key[:4]}...{key[-4:]}"
+
+
+def _retry_api_call(func, max_retries=MAX_RETRIES):
+    """Exponential backoff retry wrapper for API calls."""
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise
+            backoff = min(BASE_BACKOFF * (2 ** attempt), MAX_BACKOFF)
+            log.warning(
+                "API call failed (attempt %d/%d), retrying in %.1fs: %s",
+                attempt + 1,
+                max_retries,
+                backoff,
+                str(e)[:100],
+            )
+            time.sleep(backoff)
 
 
 class AlpacaBroker:
@@ -22,41 +54,45 @@ class AlpacaBroker:
             api_version="v2",
         )
         mode = "PAPER" if "paper" in config.ALPACA_BASE_URL else "🔴 LIVE"
-        log.info("📡 Alpaca broker connected | %s", mode)
+        key_masked = _mask_key(config.ALPACA_API_KEY)
+        log.info("📡 Alpaca broker connected | %s | key=%s", mode, key_masked)
 
     def is_market_open(self) -> bool:
         try:
-            return self.api.get_clock().is_open
+            return _retry_api_call(lambda: self.api.get_clock().is_open)
         except Exception as e:
-            log.error("Clock check failed: %s", e)
+            log.error("Clock check failed after retries: %s", e)
             return False
 
     def get_portfolio(self) -> dict:
         try:
-            acct = self.api.get_account()
-            positions = self.api.list_positions()
-            pos_list = []
-            for p in positions:
-                pos_list.append(
-                    {
-                        "symbol": p.symbol,
-                        "qty": float(p.qty),
-                        "avg_entry": float(p.avg_entry_price),
-                        "current_price": float(p.current_price),
-                        "market_value": float(p.market_value),
-                        "unrealized_pl": float(p.unrealized_pl),
-                        "unrealized_plpc": float(p.unrealized_plpc),
-                    }
-                )
-            return {
-                "cash": float(acct.cash),
-                "equity": float(acct.equity),
-                "daily_pl": float(acct.equity) - float(acct.last_equity),
-                "buying_power": float(acct.buying_power),
-                "positions": pos_list,
-            }
+            def fetch_portfolio():
+                acct = self.api.get_account()
+                positions = self.api.list_positions()
+                pos_list = []
+                for p in positions:
+                    pos_list.append(
+                        {
+                            "symbol": p.symbol,
+                            "qty": float(p.qty),
+                            "avg_entry": float(p.avg_entry_price),
+                            "current_price": float(p.current_price),
+                            "market_value": float(p.market_value),
+                            "unrealized_pl": float(p.unrealized_pl),
+                            "unrealized_plpc": float(p.unrealized_plpc),
+                        }
+                    )
+                return {
+                    "cash": float(acct.cash),
+                    "equity": float(acct.equity),
+                    "daily_pl": float(acct.equity) - float(acct.last_equity),
+                    "buying_power": float(acct.buying_power),
+                    "positions": pos_list,
+                }
+            
+            return _retry_api_call(fetch_portfolio)
         except Exception as e:
-            log.error("Portfolio fetch failed: %s", e)
+            log.error("Portfolio fetch failed after retries: %s", e)
             return {
                 "cash": 0,
                 "equity": 0,
@@ -92,24 +128,31 @@ class AlpacaBroker:
 
         try:
             if action == "buy" and stop and target:
-                order = self.api.submit_order(
-                    symbol=ticker,
-                    qty=qty,
-                    side="buy",
-                    type="market",
-                    time_in_force="day",
-                    order_class="bracket",
-                    stop_loss={"stop_price": round(stop, 2)},
-                    take_profit={"limit_price": round(target, 2)},
-                )
+                def submit_bracket_order():
+                    order = self.api.submit_order(
+                        symbol=ticker,
+                        qty=qty,
+                        side="buy",
+                        type="market",
+                        time_in_force="day",
+                        order_class="bracket",
+                        stop_loss={"stop_price": round(stop, 2)},
+                        take_profit={"limit_price": round(target, 2)},
+                    )
+                    return order
+                order = _retry_api_call(submit_bracket_order)
             else:
-                order = self.api.submit_order(
-                    symbol=ticker,
-                    qty=qty,
-                    side=action,
-                    type="market",
-                    time_in_force="day",
-                )
+                def submit_simple_order():
+                    order = self.api.submit_order(
+                        symbol=ticker,
+                        qty=qty,
+                        side=action,
+                        type="market",
+                        time_in_force="day",
+                    )
+                    return order
+                order = _retry_api_call(submit_simple_order)
+            
             return {
                 "order_id": order.id,
                 "symbol": order.symbol,
@@ -119,7 +162,7 @@ class AlpacaBroker:
                 "submitted": str(order.submitted_at),
             }
         except Exception as e:
-            log.error("Order failed [%s %s x%d]: %s", action, ticker, qty, e)
+            log.error("Order failed after retries [%s %s x%d]: %s", action, ticker, qty, e)
             return None
 
     def close_position(self, ticker: str):

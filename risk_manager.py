@@ -67,7 +67,16 @@ class RiskManager:
         return True, ""
 
     def _check_confidence(self, decision: dict) -> Tuple[bool, str]:
-        conf = float(decision.get("confidence", 0))
+        try:
+            conf = decision.get("confidence")
+            if conf is None:
+                return False, "Confidence not provided in decision"
+            conf = float(conf)
+            if conf < 0 or conf > 1:
+                return False, f"Invalid confidence {conf} (must be 0-1)"
+        except (TypeError, ValueError) as e:
+            return False, f"Confidence parsing error: {e}"
+        
         minimum = self.config.MIN_CONFIDENCE
         if self._consecutive_losses >= 2:
             minimum = min(minimum + 0.05 * self._consecutive_losses, 0.90)
@@ -79,19 +88,32 @@ class RiskManager:
         return True, ""
 
     def _check_risk_reward(self, decision: dict) -> Tuple[bool, str]:
-        rr = decision.get("risk_reward")
-        entry = decision.get("entry_price") or decision.get("price")
-        stop = decision.get("stop_loss")
-        target = decision.get("take_profit")
-        if rr and float(rr) < self.config.MIN_RISK_REWARD:
-            return False, f"R:R {rr} < min {self.config.MIN_RISK_REWARD}"
-        if entry and stop and target and decision.get("action") == "buy":
-            risk = abs(float(entry) - float(stop))
-            reward = abs(float(target) - float(entry))
-            if risk > 0 and reward / risk < self.config.MIN_RISK_REWARD:
-                return False, (
-                    f"R:R {reward/risk:.1f} < min " f"{self.config.MIN_RISK_REWARD}"
-                )
+        try:
+            rr = decision.get("risk_reward")
+            entry = decision.get("entry_price") or decision.get("price")
+            stop = decision.get("stop_loss")
+            target = decision.get("take_profit")
+            
+            if rr is not None:
+                rr = float(rr)
+                if rr < self.config.MIN_RISK_REWARD:
+                    return False, f"R:R {rr:.1f} < min {self.config.MIN_RISK_REWARD}"
+            
+            if entry and stop and target and decision.get("action") == "buy":
+                entry = float(entry)
+                stop = float(stop)
+                target = float(target)
+                risk = abs(entry - stop)
+                reward = abs(target - entry)
+                if risk > 0:
+                    actual_rr = reward / risk
+                    if actual_rr < self.config.MIN_RISK_REWARD:
+                        return False, (
+                            f"R:R {actual_rr:.1f} < min {self.config.MIN_RISK_REWARD}"
+                        )
+        except (TypeError, ValueError) as e:
+            return False, f"Risk/reward parsing error: {e}"
+        
         return True, ""
 
     def _check_trend_alignment(self, decision: dict) -> Tuple[bool, str]:
