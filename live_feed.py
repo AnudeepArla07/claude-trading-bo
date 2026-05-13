@@ -24,6 +24,8 @@ from typing import Callable, Dict, List, Optional
 
 import pytz
 
+from position_manager import PositionManager
+
 log = logging.getLogger(__name__)
 ET = pytz.timezone("America/New_York")
 
@@ -34,6 +36,7 @@ class LiveFeed:
         api_key: str,
         secret_key: str,
         watchlist: List[str],
+        position_manager: PositionManager,
         on_update: Callable,  # callback(symbol, price, volume, change_pct)
         on_exit: Callable,  # callback(symbol, reason, price)
         on_trigger: Callable,  # callback(symbol, trigger_name, price, pl_pct)
@@ -42,6 +45,7 @@ class LiveFeed:
         self.api_key = api_key
         self.secret_key = secret_key
         self.watchlist = [t.upper() for t in watchlist]
+        self.position_manager = position_manager
         self.on_update = on_update
         self.on_exit = on_exit
         self.on_trigger = on_trigger
@@ -55,32 +59,12 @@ class LiveFeed:
         self._last_prices: Dict[str, float] = {}
         self._bar_counts: Dict[str, int] = {}
 
-        # Open positions for real-time management
-        # Format: {
-        #   "NVDA": {
-        #     "entry_price": 450.0,
-        #     "stop_loss":   441.0,
-        #     "take_profit": 478.0,
-        #     "atr":         4.5,
-        #     "peak_price":  450.0,
-        #     "entry_time":  datetime,
-        #     "qty":         10,
-        #     "side":        "long",
-        #     "breakeven_moved": False,
-        #     "locked_1pct":     False,
-        #     "triggered_1up":   False,
-        #     "triggered_2up":   False,
-        #     "triggered_1dn":   False,
-        #   }
-        # }
-        self._positions: Dict[str, dict] = {}
-
         log.info(
             "📡 LiveFeed initialized | feed=%s | tickers=%s", data_feed, self.watchlist
         )
 
     # ─────────────────────────────────────────────────────────────
-    # POSITION REGISTRATION
+    # POSITION REGISTRATION (delegated to PositionManager)
     # ─────────────────────────────────────────────────────────────
 
     def register_position(
@@ -93,47 +77,24 @@ class LiveFeed:
         qty: int,
         side: str = "long",
     ):
-        """
-        Register a new position for real-time monitoring.
-        Call this immediately after a trade executes.
-        """
-        self._positions[symbol] = {
-            "entry_price": entry_price,
-            "stop_loss": stop_loss,
-            "take_profit": take_profit,
-            "atr": atr,
-            "peak_price": entry_price,
-            "entry_time": datetime.now(ET),
-            "qty": qty,
-            "side": side,
-            "breakeven_moved": False,
-            "locked_1pct": False,
-            "triggered_1up": False,
-            "triggered_2up": False,
-            "triggered_1dn": False,
-            "was_negative": False,
-        }
-        log.info(
-            "📌 Position registered: %s  entry=$%.2f  stop=$%.2f  target=$%.2f  atr=$%.2f",
-            symbol,
-            entry_price,
-            stop_loss,
-            take_profit,
-            atr,
+        """Register a new position for real-time monitoring."""
+        self.position_manager.register(
+            symbol=symbol,
+            entry_price=entry_price,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            atr=atr,
+            qty=qty,
+            side=side,
         )
 
     def remove_position(self, symbol: str):
         """Remove position from monitoring after it's closed."""
-        if symbol in self._positions:
-            del self._positions[symbol]
-            log.info("🗑️  Position removed from monitoring: %s", symbol)
+        self.position_manager.remove(symbol)
 
     def update_stop(self, symbol: str, new_stop: float):
         """Update stop level for an existing position."""
-        if symbol in self._positions:
-            old = self._positions[symbol]["stop_loss"]
-            self._positions[symbol]["stop_loss"] = new_stop
-            log.info("🔄 Stop updated: %s  $%.2f → $%.2f", symbol, old, new_stop)
+        self.position_manager.update_stop(symbol, new_stop)
 
     # ─────────────────────────────────────────────────────────────
     # REAL-TIME STOP MANAGEMENT
@@ -142,123 +103,49 @@ class LiveFeed:
     def _check_position(self, symbol: str, price: float):
         """
         Full position check on every price update.
-        Handles stops, trailing, breakeven, time stops, and triggers.
+        Delegates to PositionManager for state management.
         """
-        pos = self._positions.get(symbol)
-        if not pos:
-            return
-
-        entry = pos["entry_price"]
-        stop = pos["stop_loss"]
-        target = pos["take_profit"]
-        atr = pos["atr"]
-        peak = pos["peak_price"]
-        side = pos["side"]
-        entry_tm = pos["entry_time"]
-
-        # Calculate P&L
-        if side == "long":
-            pl_pct = (price - entry) / entry * 100
-        else:
-            pl_pct = (entry - price) / entry * 100
-
-        # Track if was ever negative
-        if pl_pct < 0:
-            pos["was_negative"] = True
-
-        # ── 1. Hard stop hit ───────────────────────────────────
-        if side == "long" and price <= stop:
+        # Check for exit conditions (stop, target, time)
+        exit_reason, pl_pct = self.position_manager.check_position(symbol, price)
+        if exit_reason:
             log.info(
-                "🛑 STOP HIT: %s  price=$%.2f  stop=$%.2f  P&L=%.1f%%",
+                "🔔 EXIT TRIGGERED: %s  price=$%.2f  %s",
                 symbol,
                 price,
-                stop,
-                pl_pct,
+                exit_reason,
             )
-            self.on_exit(symbol, f"stop_loss (P&L: {pl_pct:.1f}%)", price)
+            self.on_exit(symbol, exit_reason, price)
             self.remove_position(symbol)
             return
 
-        # ── 2. Profit target hit ───────────────────────────────
-        if side == "long" and price >= target:
-            log.info(
-                "🎯 TARGET HIT: %s  price=$%.2f  target=$%.2f  P&L=+%.1f%%",
-                symbol,
-                price,
-                target,
-                pl_pct,
-            )
-            self.on_exit(symbol, f"profit_target (+{pl_pct:.1f}%)", price)
-            self.remove_position(symbol)
-            return
+        # Check for breakeven stop trigger
+        trigger = self.position_manager.update_breakeven_stop(symbol, price)
+        if trigger:
+            self.on_trigger(symbol, trigger, price, pl_pct)
 
-        # ── 3. Breakeven stop — move stop to entry when up 1% ──
-        if pl_pct >= 1.0 and not pos["breakeven_moved"]:
-            breakeven = entry * 1.001  # just above entry to cover commission
-            if breakeven > stop:
-                pos["stop_loss"] = breakeven
-                pos["breakeven_moved"] = True
-                log.info(
-                    "📈 BREAKEVEN: %s up %.1f%% — stop moved to $%.2f",
-                    symbol,
-                    pl_pct,
-                    breakeven,
-                )
-                self.on_trigger(symbol, "breakeven_stop", price, pl_pct)
+        # Check for locked profit trigger
+        trigger = self.position_manager.update_locked_profit(symbol, price)
+        if trigger:
+            self.on_trigger(symbol, trigger, price, pl_pct)
 
-        # ── 4. Lock in 1% — move stop to +1% when up 2% ───────
-        if pl_pct >= 2.0 and not pos["locked_1pct"]:
-            lock_stop = entry * 1.01  # lock in 1% profit
-            if lock_stop > pos["stop_loss"]:
-                pos["stop_loss"] = lock_stop
-                pos["locked_1pct"] = True
-                log.info(
-                    "🔒 LOCK 1%%: %s up %.1f%% — stop locked at $%.2f (+1%%)",
-                    symbol,
-                    pl_pct,
-                    lock_stop,
-                )
-                self.on_trigger(symbol, "locked_1pct", price, pl_pct)
+        # Update trailing stop
+        if self.position_manager.update_trailing_stop(symbol, price):
+            # Trailing stop was updated, could log but keep quiet for noise reduction
+            pass
 
-        # ── 5. Trailing stop — trail by 1.5x ATR from peak ────
-        if price > peak:
-            pos["peak_price"] = price
-            new_trail = price - atr * 1.5
-            if new_trail > pos["stop_loss"]:
-                pos["stop_loss"] = new_trail
-                log.info(
-                    "📈 TRAIL: %s new peak=$%.2f  trail stop=$%.2f",
-                    symbol,
-                    price,
-                    new_trail,
-                )
+        # Check for significant move triggers
+        self._check_triggers(symbol, price, pl_pct)
 
-        # ── 6. Time stop — exit flat/losing after 2 hours ──────
-        now = datetime.now(ET)
-        held_hr = (now - entry_tm).seconds / 3600
-        if held_hr > 2.0 and pl_pct < 0.5:
-            log.info(
-                "⏰ TIME STOP: %s held %.1fhr at %.1f%% — exiting",
-                symbol,
-                held_hr,
-                pl_pct,
-            )
-            self.on_exit(
-                symbol,
-                f"time_stop (held {held_hr:.1f}hr at {pl_pct:.1f}%)",
-                price,
-            )
-            self.remove_position(symbol)
-            return
-
-        # ── 7. Significant move triggers ───────────────────────
-        self._check_triggers(symbol, pos, price, pl_pct)
-
-    def _check_triggers(self, symbol: str, pos: dict, price: float, pl_pct: float):
+    def _check_triggers(self, symbol: str, price: float, pl_pct: float):
         """
         Fire callbacks when position hits key levels.
         Triggers Claude re-analysis at important moments.
         """
+        # Get position to check trigger flags
+        pos = self.position_manager.get(symbol)
+        if not pos:
+            return
+
         # Up 1% for first time
         if pl_pct >= 1.0 and not pos["triggered_1up"]:
             pos["triggered_1up"] = True
@@ -414,7 +301,7 @@ class LiveFeed:
         return dict(self._last_prices)
 
     def get_position_status(self, symbol: str) -> Optional[dict]:
-        return self._positions.get(symbol)
+        return self.position_manager.get(symbol)
 
     def get_stats(self) -> dict:
         return {
@@ -422,5 +309,5 @@ class LiveFeed:
             "tickers": self.watchlist,
             "bar_counts": dict(self._bar_counts),
             "prices": dict(self._last_prices),
-            "positions": list(self._positions.keys()),
+            "positions": self.position_manager.get_symbols(),
         }

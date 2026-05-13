@@ -36,6 +36,7 @@ from broker import AlpacaBroker
 from database import TradeDatabase
 from scanner import MarketScanner
 from live_feed import LiveFeed
+from position_manager import PositionManager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -80,7 +81,7 @@ class TradingBot:
         self.cycle_count = 0
         self.live_prices: Dict[str, float] = {}
         self.live_feed: Optional[LiveFeed] = None
-        self._last_portfolio: Optional[Dict] = None  # For reconciliation
+        self.positions = PositionManager()  # Centralized position tracking
         self._unfilled_orders: Dict[str, float] = {}  # Track unfilled order timestamps
 
         if dry_run:
@@ -97,29 +98,28 @@ class TradingBot:
     # ─────────────────────────────────────────────────────────────
 
     def _reconcile_positions(self):
-        """Reconcile live_feed positions with broker positions on startup."""
+        """Reconcile position manager with broker positions on startup."""
         try:
             portfolio = self.broker.get_portfolio()
-            if portfolio.get("positions"):
-                log.info("📌 Reconciling %d positions from broker", len(portfolio["positions"]))
-                for pos in portfolio["positions"]:
-                    symbol = pos["symbol"]
-                    # Register with live feed if it exists
-                    if self.live_feed and symbol in self.watchlist:
-                        # Estimate ATR and targets from current position
-                        atr = abs(pos["avg_entry"] - pos["current_price"]) * 0.5  # rough estimate
-                        self.live_feed.register_position(
-                            symbol=symbol,
+            missing, extra = self.positions.reconcile_with_broker(portfolio.get("positions", []))
+            
+            if extra:
+                log.info("📌 Registering %d new positions from broker", len(extra))
+                for pos in portfolio.get("positions", []):
+                    if pos["symbol"] in extra:
+                        # Estimate ATR from recent price movement
+                        atr = abs(pos["avg_entry"] - pos["current_price"]) * 0.5
+                        self.positions.register(
+                            symbol=pos["symbol"],
                             entry_price=pos["avg_entry"],
-                            stop_loss=pos["current_price"] - atr,  # placeholder
-                            take_profit=pos["current_price"] + atr * 2,  # placeholder
+                            stop_loss=pos["current_price"] - atr,
+                            take_profit=pos["current_price"] + atr * 2,
                             atr=atr,
                             qty=int(pos["qty"]),
                             side="long",
                         )
-                        log.info("   ✓ Registered: %s", symbol)
             else:
-                log.info("✅ No open positions to reconcile")
+                log.info("✅ Position reconciliation complete — all synced")
         except Exception as e:
             log.warning("Position reconciliation failed: %s", e)
 
@@ -149,6 +149,7 @@ class TradingBot:
                 api_key=self.config.ALPACA_API_KEY,
                 secret_key=self.config.ALPACA_SECRET_KEY,
                 watchlist=self.watchlist,
+                position_manager=self.positions,
                 on_update=self._on_price_update,
                 on_exit=self._on_live_exit,
                 on_trigger=self._on_live_trigger,
