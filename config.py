@@ -1,111 +1,173 @@
 """
 config.py
 =========
-All settings in one place. Edit this file before running the bot.
+Single source of truth for ALL bot and backtest settings.
+
+HOW TO SWITCH BETWEEN PAPER AND LIVE TRADING:
+  1. Scroll to the TRADING MODE section below
+  2. Comment out PAPER lines, uncomment LIVE lines
+  3. Set ALPACA_PAPER_KEY / ALPACA_LIVE_KEY in your .env file
+  4. Never commit real keys to GitHub
 """
 
 import os
 
+# ══════════════════════════════════════════════════════════════════
+# ENV LOADER — auto-reads .env file without needing `source .env`
+# ══════════════════════════════════════════════════════════════════
 
-def _load_env_file(path: str) -> None:
-    if not os.path.exists(path):
+
+def _load_env():
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    if not os.path.exists(env_path):
         return
-    with open(path, "r", encoding="utf-8") as f:
+    with open(env_path) as f:
         for line in f:
             line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
+            if not line or line.startswith("#"):
                 continue
-            key, _, value = line.partition("=")
-            key = key.strip()
-            value = value.strip().strip('"').strip("'")
-            if key and key not in os.environ:
-                os.environ[key] = value
+            line = line.replace("export ", "")
+            if "=" in line:
+                key, val = line.split("=", 1)
+                os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
 
 
-_load_env_file(os.path.join(os.path.dirname(__file__), ".env"))
+_load_env()
 
 
-def _mask_key(key: str) -> str:
-    """Mask API key for safe logging (show first and last 4 chars)."""
-    if not key or len(key) <= 8:
-        return "***"
-    return f"{key[:4]}...{key[-4:]}"
+# ══════════════════════════════════════════════════════════════════
+# VALIDATION — runs at bot startup before any API call
+# ══════════════════════════════════════════════════════════════════
 
 
 def validate_config() -> None:
-    """Validate all required API keys are set."""
-    required_keys = {
-        "ANTHROPIC_API_KEY": "Anthropic API key from https://console.anthropic.com",
-        "ALPACA_API_KEY": "Alpaca API key from https://alpaca.markets",
-        "ALPACA_SECRET_KEY": "Alpaca secret key from https://alpaca.markets",
+    required = {
+        "ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY", ""),
+        "ALPACA_API_KEY": os.getenv("ALPACA_API_KEY", ""),
+        "ALPACA_SECRET_KEY": os.getenv("ALPACA_SECRET_KEY", ""),
     }
-
-    for key, desc in required_keys.items():
-        value = os.getenv(key, "")
-        if not value or value.startswith("YOUR_"):
-            raise ValueError(
-                f"❌ {key} not configured!\n"
-                f"   {desc}\n"
-                f"   Set in .env file or environment variable."
-            )
+    missing = [k for k, v in required.items() if not v or "YOUR_" in v]
+    if missing:
+        raise ValueError(
+            f"Missing or placeholder API keys: {missing}\n"
+            f"Set them in your .env file and restart."
+        )
 
 
 class Config:
-    # ── API Keys ──────────────────────────────────────────────────────────────
-    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "YOUR_ANTHROPIC_KEY")
-    ALPACA_API_KEY: str = os.getenv("ALPACA_API_KEY", "YOUR_ALPACA_KEY")
-    ALPACA_SECRET_KEY: str = os.getenv("ALPACA_SECRET_KEY", "YOUR_ALPACA_SECRET")
 
-    # Paper trading (safe). Change to "https://api.alpaca.markets" for live.
+    # ── API Keys ──────────────────────────────────────────────────
+    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+    ALPACA_API_KEY: str = os.getenv("ALPACA_API_KEY", "")
+    ALPACA_SECRET_KEY: str = os.getenv("ALPACA_SECRET_KEY", "")
+
+    # ══════════════════════════════════════════════════════════════
+    # TRADING MODE — comment/uncomment to switch
+    # ══════════════════════════════════════════════════════════════
+
+    # ── PAPER TRADING (safe — use this until strategy is proven) ──
     ALPACA_BASE_URL: str = "https://paper-api.alpaca.markets"
+    ALPACA_DATA_FEED: str = "iex"  # free 15-min delayed
 
-    # "iex" = free 15-min delayed. "sip" = $9/mo real-time.
-    ALPACA_DATA_FEED = "iex"
+    # ── LIVE TRADING (real money — uncomment when ready) ──────────
+    # ALPACA_BASE_URL:  str = "https://api.alpaca.markets"
+    # ALPACA_DATA_FEED: str = "sip"   # $9/mo real-time feed
 
-    # Run the bot without placing any orders. Useful for testing and validation.
-    DRY_RUN: bool = os.getenv("DRY_RUN", "0").lower() in ("1", "true", "yes")
+    DRY_RUN: bool = False  # overridden at runtime by --dry-run flag
 
-    # ── Watchlist ─────────────────────────────────────────────────────────────
-    # High-volume momentum tickers best suited for this strategy + options.
+    # ══════════════════════════════════════════════════════════════
+    # WATCHLIST
+    # SOFI removed — consistent underperformer in backtesting
+    # META, AMZN removed — underperformed vs momentum tickers
+    # SPY/QQQ removed from trading — index ETFs not worth the risk/reward
+    # SPY still fetched every cycle as regime reference (REGIME_TICKER)
+    # ══════════════════════════════════════════════════════════════
+
     WATCHLIST: list = [
         "NVDA",
         "AMD",
         "TSLA",
-        "META",
         "AAPL",
-        "MSFT",
-        "AMZN",
         "GOOGL",
+        "MSFT",
         "PLTR",
-        "SOFI",
         "MSTR",
         "COIN",
         "UBER",
     ]
 
-    # ── Claude Model ──────────────────────────────────────────────────────────
+    REGIME_TICKER: str = "SPY"  # fetched every cycle for regime, never traded
+    NO_TRADE_TICKERS: set = {"SPY", "QQQ"}  # never enter stock or options positions
+
+    # ══════════════════════════════════════════════════════════════
+    # CLAUDE MODEL
+    # ══════════════════════════════════════════════════════════════
+
     MODEL: str = "claude-sonnet-4-6"
     MAX_TOKENS: int = 1200
 
-    # ── Risk Settings ─────────────────────────────────────────────────────────
-    MIN_CONFIDENCE: float = 0.72  # min Claude confidence to trade
+    # ══════════════════════════════════════════════════════════════
+    # STRATEGY PARAMETERS
+    # These match backtest_v10.py exactly — DO NOT change without
+    # re-running the backtest to verify impact.
+    # ══════════════════════════════════════════════════════════════
+
+    # ── Claude decision thresholds ────────────────────────────────
+    MIN_CONFIDENCE: float = 0.65  # min confidence to trade
+    # 5/7 signals = 0.71 ≥ 0.65 ✅
+    # 4/7 signals = 0.57 < 0.65 ❌
     MIN_RISK_REWARD: float = 2.0  # min R:R ratio
-    RISK_PER_TRADE: float = 0.01  # risk 1% of equity per stock trade
-    MAX_POSITION_PCT: float = 0.15  # max 15% of portfolio per position
+
+    # ── Position sizing (Lever 3 from backtest) ───────────────────
+    RISK_PER_TRADE: float = 0.02  # 2% of equity per trade
+    MAX_POSITION_PCT: float = 0.20  # max 20% per position
+    MAX_POSITIONS: int = 3  # max concurrent positions
+
+    # ── ATR-based stop/target (must match backtest ATR_PARAMS) ────
+    # Used by broker.py to compute bracket order levels
+    ATR_PARAMS: dict = {
+        "momentum": {"stop": 2.5, "target": 12.0},  # 4.8:1 R:R
+        "quality": {"stop": 3.5, "target": 10.0},  # 2.9:1 R:R
+        "index": {"stop": 4.0, "target": 8.0},  # 2.0:1 R:R
+    }
+
+    # ── Market regime filter (Lever 5) ────────────────────────────
+    # SPY must be at least BULL (1) before any trades are allowed
+    # Regime values: 2=STRONG_BULL 1=BULL 0=CHOPPY -1=BEAR -2=STRONG_BEAR
+    SPY_BULL_MIN: float = 1.0  # sit out in CHOPPY/BEAR markets
+
+    # ── Signal pre-filter ─────────────────────────────────────────
+    # Only call Claude when this many signals are already aligned
+    # Reduces API calls, ensures Claude sees quality setups only
+    MIN_SIGNALS_PRE_FILTER: int = 4  # 4/7 minimum before calling Claude
+
+    # ── Partial profit thresholds (match backtest) ────────────────
+    PARTIAL_PROFIT_MOM: float = 0.06  # momentum: take half at +6%
+    PARTIAL_PROFIT_STD: float = 0.04  # quality/index: take half at +4%
+
+    # ── Risk guards ───────────────────────────────────────────────
     DAILY_LOSS_LIMIT: float = 0.03  # halt if down 3% in a day
-    MAX_DRAWDOWN: float = 0.08  # halt if down 8% from peak ever
-    MAX_TRADES_PER_DAY: int = 15  # max total trades per day
-    MAX_CONSECUTIVE_LOSSES: int = 3  # pause after 3 losses in a row
+    MAX_DRAWDOWN: float = 0.08  # halt if down 8% from peak
+    MAX_TRADES_PER_DAY: int = 15
+    MAX_CONSECUTIVE_LOSSES: int = 3
 
-    # ── Options Risk ──────────────────────────────────────────────────────────
-    OPTIONS_MAX_LOSS_PCT: float = 0.02  # max 2% of portfolio per options trade
-    OPTIONS_PROFIT_TARGET: float = 0.80  # close at 80% gain on premium
-    OPTIONS_STOP_LOSS: float = 0.50  # close at 50% loss on premium
-    OPTIONS_MIN_VOLUME: int = 10  # minimum contract volume
-    OPTIONS_MAX_SPREAD_PCT: float = 0.15  # max 15% bid/ask spread
-    OPTIONS_MIN_DTE: int = 7  # min days to expiry
-    OPTIONS_MAX_DTE: int = 45  # max days to expiry
+    # ══════════════════════════════════════════════════════════════
+    # OPTIONS SETTINGS
+    # ══════════════════════════════════════════════════════════════
 
-    # ── Bot Behavior ──────────────────────────────────────────────────────────
-    CYCLE_MINUTES: int = 10  # analyze every 10 minutes
-    CLOSE_EOD: bool = True  # close all positions at 3:45 PM ET
+    OPTIONS_MAX_LOSS_PCT: float = 0.02
+    OPTIONS_PROFIT_TARGET: float = 0.80
+    OPTIONS_STOP_LOSS: float = 0.50
+    OPTIONS_MIN_VOLUME: int = 10
+    OPTIONS_MAX_SPREAD_PCT: float = 0.15
+    OPTIONS_MIN_DTE: int = 7
+    OPTIONS_MAX_DTE: int = 45
+
+    # ══════════════════════════════════════════════════════════════
+    # BOT BEHAVIOR
+    # ══════════════════════════════════════════════════════════════
+
+    CYCLE_MINUTES: int = 10
+    CLOSE_EOD: bool = False  # False = let winners run overnight
+    # True  = safer for paper trading
+    # PAPER: set True | LIVE: set False
