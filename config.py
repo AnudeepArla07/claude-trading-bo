@@ -76,8 +76,6 @@ class Config:
         "MSFT",
         "AMZN",
         "GOOGL",
-        "SPY",
-        "QQQ",
         "PLTR",
         "SOFI",
         "MSTR",

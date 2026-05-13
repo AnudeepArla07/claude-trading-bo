@@ -55,7 +55,13 @@ class TradingBot:
         log.info("=" * 65)
         log.info("🤖  Claude Trading Bot  |  Stocks + Options + Real-Time")
         log.info("=" * 65)
-
+        self.data = MarketDataFeed(self.config)
+        # Auto-classify watchlist — must run before first cycle
+        log.info("🔍 Classifying watchlist...")
+        self.ticker_classifications = self.data.classify_watchlist(
+            self.config.WATCHLIST
+        )
+        log.info("✅ Classification complete: %s", self.ticker_classifications)
         # Validate configuration before initializing
         from config import validate_config
 
