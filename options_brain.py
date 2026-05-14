@@ -192,7 +192,11 @@ class OptionsBrain:
         rsi_5m = stock_data.get("rsi_5m")
         mom1d = stock_data.get("momentum_1d") or 0.0
         mom5d = stock_data.get("momentum_5d") or 0.0
-        signals = stock_data.get("signals", {})
+        signals = (
+            stock_data.get("signals")
+            if isinstance(stock_data.get("signals"), dict)
+            else {}
+        )
         bias = signals.get("bias", "NEUTRAL")
         signal_bias = options_data.get("signal_bias", "NEUTRAL")
 
@@ -424,12 +428,16 @@ class OptionsBrain:
     def _build_prompt(self, ticker: str, stock_data: dict, options_data: dict) -> str:
         price = stock_data.get("price", 0)
         regime = stock_data.get("market_regime", "UNKNOWN")
-        signals = stock_data.get("signals", {})
+        signals = (
+            stock_data.get("signals")
+            if isinstance(stock_data.get("signals"), dict)
+            else {}
+        )
         bias = signals.get("bias", "NEUTRAL")
         rsi_1d = stock_data.get("rsi_14", "N/A")
         rsi_1h = stock_data.get("rsi_1h", "N/A")
         rsi_5m = stock_data.get("rsi_5m", "N/A")
-        macd = stock_data.get("macd") or {}
+        macd_bullish = bool(stock_data.get("macd_bullish", False))
         atr = stock_data.get("atr_14", "N/A")
         vr = stock_data.get("vol_ratio") or 1.0
         mom1d = stock_data.get("momentum_1d") or 0.0
@@ -467,7 +475,7 @@ class OptionsBrain:
             f"  Regime   : {regime}",
             f"  Bias     : {bias}",
             f"  RSI      : daily={rsi_1d}  1h={rsi_1h}  5m={rsi_5m}",
-            f"  MACD     : {'Bullish ✅' if macd.get('bullish') else 'Bearish ❌'}",
+            f"  MACD     : {'Bullish ✅' if macd_bullish else 'Bearish ❌'}",
             f"  Volume   : {vr:.1f}x avg  ATR=${atr}",
             f"  Buy sigs : {', '.join(buys) if buys else 'none'}",
             f"  Sell sigs: {', '.join(sells) if sells else 'none'}",
