@@ -116,9 +116,11 @@ class MarketDataFeed:
         change_pct = ((price - prev_close) / prev_close * 100) if prev_close else 0.0
 
         # ── Fetch bars ────────────────────────────────────────
-        bars_1d = self._get_bars(ticker, TimeFrame.Day, limit=60, days_back=120)
-        bars_1h = self._get_bars(ticker, TimeFrame.Hour, limit=50, days_back=10)
-        bars_5m = self._get_bars(ticker, TimeFrame.Minute, limit=75, days_back=1)
+        # limit must exceed trading days in the window so Alpaca returns the
+        # FULL range rather than the oldest N bars (120 cal days ≈ 86 trading days)
+        bars_1d = self._get_bars(ticker, TimeFrame.Day, limit=200, days_back=120)
+        bars_1h = self._get_bars(ticker, TimeFrame.Hour, limit=100, days_back=10)
+        bars_5m = self._get_bars(ticker, TimeFrame.Minute, limit=150, days_back=1)
 
         log.debug(
             "%s bars → 1d:%d 1h:%d 5m:%d",
