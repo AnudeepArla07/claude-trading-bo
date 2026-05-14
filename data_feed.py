@@ -68,8 +68,14 @@ class MarketDataFeed:
                 continue
             try:
                 data = self._process_ticker(ticker, snap)
-                if data:
+                if isinstance(data, dict) and data:
                     result[ticker] = data
+                elif data is not None:
+                    log.warning(
+                        "Unexpected type from _process_ticker %s: %s",
+                        ticker,
+                        type(data),
+                    )
             except Exception as e:
                 log.error("Indicator error %s: %s", ticker, e, exc_info=True)
 

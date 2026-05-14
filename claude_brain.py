@@ -125,12 +125,18 @@ class ClaudeBrain:
         Only tickers with entry_signal=True are shown to Claude.
         """
         # Pre-filter: only show Claude tickers that pass signal threshold
-        filtered_data = {
-            t: d
-            for t, d in market_data.items()
-            if d.get("signal_count", 0) >= self.config.MIN_SIGNALS_PRE_FILTER
-            or d.get("entry_signal", False)
-        }
+        # Guard against non-dict values that can arrive from bad API snapshots
+        filtered_data = {}
+        for t, d in market_data.items():
+            if not isinstance(d, dict):
+                log.warning(
+                    "⚠️  Skipping %s — expected dict, got %s", t, type(d).__name__
+                )
+                continue
+            if d.get("signal_count", 0) >= self.config.MIN_SIGNALS_PRE_FILTER or d.get(
+                "entry_signal", False
+            ):
+                filtered_data[t] = d
 
         if not filtered_data:
             log.info("🧠 Claude: no pre-filtered setups this cycle → HOLD")
@@ -192,15 +198,15 @@ class ClaudeBrain:
 
         lines.append("\n═══ PRE-FILTERED SETUPS (4+ signals) ═══")
 
-        # Sort by signal count descending
+        # Sort by signal count descending — skip any non-dict entries defensively
         sorted_data = sorted(
-            market_data.items(),
+            [(t, d) for t, d in market_data.items() if isinstance(d, dict)],
             key=lambda x: x[1].get("signal_count", 0),
             reverse=True,
         )
 
         for ticker, d in sorted_data:
-            sig = d.get("signals", {})
+            sig = d.get("signals") if isinstance(d.get("signals"), dict) else {}
             bias = sig.get("bias", "NEUTRAL")
             t_type = d.get("ticker_type", "quality")
             regime = d.get("market_regime", "?")
