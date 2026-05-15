@@ -79,8 +79,8 @@ class OptionsBroker:
                 "max_loss": decision.get("max_loss", 0),
             }
 
-        # Validate symbol exists on Alpaca
-        symbol = self._validate_symbol(symbol)
+        # Normalize year format then validate symbol exists on Alpaca
+        symbol = self._validate_symbol(self._normalize_symbol(symbol))
         if not symbol:
             return None
 
@@ -140,6 +140,13 @@ class OptionsBroker:
 
         if not long_sym or not short_sym:
             log.error("Spread missing leg symbols")
+            return None
+
+        # Normalize year format then validate both legs
+        long_sym = self._validate_symbol(self._normalize_symbol(long_sym))
+        short_sym = self._validate_symbol(self._normalize_symbol(short_sym))
+        if not long_sym or not short_sym:
+            log.error("Spread leg symbol validation failed")
             return None
 
         if self.config.DRY_RUN:
@@ -207,6 +214,21 @@ class OptionsBroker:
     # ─────────────────────────────────────────────────────────────
     # SYMBOL VALIDATION
     # ─────────────────────────────────────────────────────────────
+
+    def _normalize_symbol(self, symbol: str) -> str:
+        """Convert 8-digit year OCC symbols to 6-digit standard.
+
+        Claude sometimes generates NVDA20260529C00230000 (YYYYMMDD) instead
+        of the OCC-standard NVDA260529C00230000 (YYMMDD). Strip the century.
+        """
+        # Match ticker + 8-digit date (YYYYMMDD) + C/P + strike
+        m = re.match(r"([A-Z]+)(20\d{2})(\d{4})([CP]\d{8})", symbol)
+        if m:
+            normalized = f"{m.group(1)}{m.group(2)[2:]}{m.group(3)}{m.group(4)}"
+            if normalized != symbol:
+                log.info("   🔧 Symbol normalized: %s → %s", symbol, normalized)
+            return normalized
+        return symbol
 
     def _validate_symbol(self, symbol: str) -> Optional[str]:
         """Verify symbol exists on Alpaca. Find nearest if not."""
